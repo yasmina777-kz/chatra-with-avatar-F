@@ -8,7 +8,7 @@
           </div>
           <div>
             <div class="modal-title">Создать AI-аватара</div>
-            <div class="modal-sub">Он будет читать лекции вашим голосом</div>
+            <div class="modal-sub">Он будет читать лекции выбранным голосом</div>
           </div>
         </div>
         <button class="btn btn-icon btn-ghost" @click="$emit('close')">
@@ -19,7 +19,7 @@
       <div class="modal-body">
         <div class="info-banner">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>Создание аватара требует одобрения администратора — это платная функция (клонирование голоса). Обычно решение принимается в течение дня.</span>
+          <span>Создание аватара требует одобрения администратора. Обычно решение принимается в течение дня.</span>
         </div>
 
         <div class="field">
@@ -27,56 +27,29 @@
           <input v-model="displayName" class="inp" placeholder="Например: Айгерим Сериковна" />
         </div>
 
+        <!-- Видео/фото учителя для Wav2Lip -->
         <div class="field">
-          <label class="field-label">Фото для аватара *</label>
-          <div v-if="!photoFile && !photoUrl" class="file-drop" @click="photoInput?.click()">
-            <input type="file" ref="photoInput" style="display:none" accept="image/png,image/jpeg,image/webp" @change="onPhotoPick" />
+          <label class="field-label">Видео или фото для аватара *</label>
+          <div v-if="!mediaFile && !mediaUrl" class="file-drop" @click="mediaInput?.click()">
+            <input type="file" ref="mediaInput" style="display:none" accept="video/mp4,video/webm,image/png,image/jpeg,image/webp" @change="onMediaPick" />
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="drop-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
-            <span class="drop-text">Загрузите фото лица <strong>(спокойное выражение, лицо чётко видно)</strong></span>
-            <span class="drop-hint">JPG, PNG, WEBP</span>
+            <span class="drop-text">Загрузите короткое видео лица <strong>(30–60 сек, смотрите прямо в камеру)</strong></span>
+            <span class="drop-hint">MP4, WEBM или фото (JPG/PNG). Видео даёт естественные движения — губы аватар подстроит под речь.</span>
           </div>
           <div v-else class="preview-row">
-            <img :src="photoPreview" class="photo-preview" />
-            <button class="btn-rm-sm" @click="resetPhoto">Заменить</button>
+            <video v-if="isVideo" :src="mediaPreview" class="photo-preview" muted playsinline />
+            <img v-else :src="mediaPreview" class="photo-preview" />
+            <button class="btn-rm-sm" @click="resetMedia">Заменить</button>
           </div>
         </div>
 
+        <!-- Выбор голоса Azure -->
         <div class="field">
-          <label class="field-label">Образец голоса *</label>
-          <div class="voice-tabs">
-            <button :class="['vtab', { active: voiceMode === 'record' }]" @click="voiceMode = 'record'">Записать с микрофона</button>
-            <button :class="['vtab', { active: voiceMode === 'upload' }]" @click="voiceMode = 'upload'">Загрузить файл</button>
-          </div>
-
-          <div v-if="voiceMode === 'record'" class="record-box">
-            <div v-if="!audioBlobUrl" class="record-controls">
-              <button class="rec-btn" :class="{ recording: isRecording }" @click="toggleRecording">
-                <svg v-if="!isRecording" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="9"/></svg>
-                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-              </button>
-              <div class="rec-hint">
-                <template v-if="isRecording">Идёт запись... {{ formatTime(recordSeconds) }} <span class="rec-min-hint">(минимум 30 сек)</span></template>
-                <template v-else>Прочитайте вслух любой текст 30-60 секунд — чем спокойнее и чище запись, тем лучше клонируется голос</template>
-              </div>
-            </div>
-            <div v-else class="audio-ready">
-              <audio :src="audioBlobUrl" controls class="audio-player" />
-              <button class="btn-rm-sm" @click="resetRecording">Записать снова</button>
-            </div>
-          </div>
-
-          <div v-else class="field">
-            <div v-if="!voiceFile" class="file-drop" @click="voiceInput?.click()">
-              <input type="file" ref="voiceInput" style="display:none" accept="audio/*" @change="onVoicePick" />
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="drop-icon"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-              <span class="drop-text">Загрузите аудиозапись голоса <strong>(30-60 сек чистой речи)</strong></span>
-              <span class="drop-hint">MP3, WAV, M4A</span>
-            </div>
-            <div v-else class="audio-ready">
-              <span class="file-name">{{ voiceFile.name }}</span>
-              <button class="btn-rm-sm" @click="voiceFile = null">Заменить</button>
-            </div>
-          </div>
+          <label class="field-label">Голос аватара *</label>
+          <select v-model="selectedVoice" class="inp">
+            <option v-for="v in VOICES" :key="v.id" :value="v.id">{{ v.label }}</option>
+          </select>
+          <span class="drop-hint">Голос, которым аватар будет читать лекции</span>
         </div>
 
         <div v-if="uploading" class="upload-progress">
@@ -97,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed } from 'vue'
 import { useToast } from '~/composables/useToast'
 import { useUploadSvc } from '~/services/uploads'
 import { useAvatarsSvc } from '~/services/avatars'
@@ -110,75 +83,29 @@ const avatarsSvc = useAvatarsSvc()
 
 const displayName = ref('')
 
-const photoInput = ref<HTMLInputElement | null>(null)
-const photoFile = ref<File | null>(null)
-const photoUrl = ref('')
-const photoPreview = computed(() => photoFile.value ? URL.createObjectURL(photoFile.value) : photoUrl.value)
-const onPhotoPick = (e: Event) => {
-  const f = (e.target as HTMLInputElement).files?.[0]
-  if (f) photoFile.value = f
-}
-const resetPhoto = () => { photoFile.value = null; photoUrl.value = '' }
+// Русские голоса Azure
+const VOICES = [
+  { id: 'ru-RU-DmitryNeural',   label: 'Дмитрий (мужской)' },
+  { id: 'ru-RU-SvetlanaNeural', label: 'Светлана (женский)' },
+  { id: 'ru-RU-DariyaNeural',   label: 'Дария (женский)' },
+]
+const selectedVoice = ref(VOICES[0].id)
 
-const voiceMode = ref<'record' | 'upload'>('record')
-const voiceInput = ref<HTMLInputElement | null>(null)
-const voiceFile = ref<File | null>(null)
-const onVoicePick = (e: Event) => {
-  const f = (e.target as HTMLInputElement).files?.[0]
-  if (f) voiceFile.value = f
-}
-
-const isRecording = ref(false)
-const recordSeconds = ref(0)
-const audioBlobUrl = ref('')
-const audioBlob = ref<Blob | null>(null)
-let mediaRecorder: MediaRecorder | null = null
-let recordedChunks: Blob[] = []
-let recordTimer: ReturnType<typeof setInterval> | null = null
-
-const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-
-const toggleRecording = async () => {
-  if (isRecording.value) {
-    mediaRecorder?.stop()
-    return
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    recordedChunks = []
-    mediaRecorder = new MediaRecorder(stream)
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data) }
-    mediaRecorder.onstop = () => {
-      const blob = new Blob(recordedChunks, { type: 'audio/webm' })
-      audioBlob.value = blob
-      audioBlobUrl.value = URL.createObjectURL(blob)
-      stream.getTracks().forEach(t => t.stop())
-      if (recordTimer) clearInterval(recordTimer)
-    }
-    mediaRecorder.start()
-    isRecording.value = true
-    recordSeconds.value = 0
-    recordTimer = setInterval(() => { recordSeconds.value++ }, 1000)
-  } catch {
-    toast.err('Не удалось получить доступ к микрофону')
-  }
-}
-const resetRecording = () => {
-  audioBlobUrl.value = ''
-  audioBlob.value = null
-  recordSeconds.value = 0
-}
-
-onBeforeUnmount(() => {
-  if (recordTimer) clearInterval(recordTimer)
-  try { (mediaRecorder as any)?.stream?.getTracks?.().forEach((t: any) => t.stop()) } catch {}
+const mediaInput = ref<HTMLInputElement | null>(null)
+const mediaFile = ref<File | null>(null)
+const mediaUrl = ref('')
+const isVideo = computed(() => {
+  if (mediaFile.value) return mediaFile.value.type.startsWith('video')
+  return /\.(mp4|webm|mov)(\?|$)/i.test(mediaUrl.value)
 })
+const mediaPreview = computed(() => mediaFile.value ? URL.createObjectURL(mediaFile.value) : mediaUrl.value)
+const onMediaPick = (e: Event) => {
+  const f = (e.target as HTMLInputElement).files?.[0]
+  if (f) mediaFile.value = f
+}
+const resetMedia = () => { mediaFile.value = null; mediaUrl.value = '' }
 
-const canSubmit = computed(() => {
-  const hasPhoto = !!(photoFile.value || photoUrl.value)
-  const hasVoice = !!(audioBlob.value || voiceFile.value)
-  return hasPhoto && hasVoice
-})
+const canSubmit = computed(() => !!(mediaFile.value || mediaUrl.value) && !!selectedVoice.value)
 
 const loading = ref(false)
 const uploading = ref(false)
@@ -188,30 +115,19 @@ const submit = async () => {
   if (!canSubmit.value) return
   loading.value = true
   uploading.value = true
-  uploadPct.value = 10
+  uploadPct.value = 15
   try {
-    let finalPhotoUrl = photoUrl.value
-    if (photoFile.value) {
-      const { file_url } = await uploadSvc.upload(photoFile.value)
-      finalPhotoUrl = file_url
+    let finalMediaUrl = mediaUrl.value
+    if (mediaFile.value) {
+      const { file_url } = await uploadSvc.upload(mediaFile.value)
+      finalMediaUrl = file_url
     }
-    uploadPct.value = 55
-
-    let finalVoiceUrl = ''
-    if (audioBlob.value) {
-      const file = new File([audioBlob.value], 'voice_sample.webm', { type: audioBlob.value.type })
-      const { file_url } = await uploadSvc.upload(file)
-      finalVoiceUrl = file_url
-    } else if (voiceFile.value) {
-      const { file_url } = await uploadSvc.upload(voiceFile.value)
-      finalVoiceUrl = file_url
-    }
-    uploadPct.value = 90
+    uploadPct.value = 80
 
     const avatar = await avatarsSvc.create({
       display_name: displayName.value || undefined,
-      photo_url: finalPhotoUrl,
-      voice_sample_url: finalVoiceUrl,
+      photo_url: finalMediaUrl,          // сюда теперь может лечь видео или фото
+      voice: selectedVoice.value,
     })
     uploadPct.value = 100
     toast.ok('Заявка отправлена на одобрение администратору')
@@ -257,21 +173,6 @@ const submit = async () => {
 .photo-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border2); }
 .btn-rm-sm { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 12px; font-size: 12px; color: var(--text3); cursor: pointer; transition: all .15s; }
 .btn-rm-sm:hover { background: var(--surface3); color: var(--text1); }
-
-.voice-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
-.vtab { flex: 1; padding: 8px 12px; border-radius: var(--r-md); font-size: 12px; font-weight: 600; color: var(--text3); background: var(--surface2); border: 1px solid var(--border); cursor: pointer; transition: all .15s; }
-.vtab.active { background: rgba(0,177,201,.1); color: var(--teal); border-color: rgba(0,177,201,.3); }
-
-.record-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px; }
-.record-controls { display: flex; align-items: center; gap: 14px; }
-.rec-btn { width: 48px; height: 48px; border-radius: 50%; background: var(--red-l); color: var(--red); border: 1px solid rgba(248,113,113,.3); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all .15s; }
-.rec-btn.recording { background: var(--red); color: #fff; animation: pulse-rec 1.5s infinite; }
-@keyframes pulse-rec { 0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,.4); } 50% { box-shadow: 0 0 0 8px rgba(248,113,113,0); } }
-.rec-hint { font-size: 12px; color: var(--text3); line-height: 1.5; }
-.rec-min-hint { color: var(--text4); }
-.audio-ready { display: flex; align-items: center; gap: 12px; }
-.audio-player { flex: 1; height: 36px; }
-.file-name { font-size: 13px; color: var(--text1); flex: 1; }
 
 .upload-progress { display: flex; flex-direction: column; gap: 5px; }
 .upload-bar-wrap { height: 3px; background: var(--border); border-radius: 3px; overflow: hidden; }

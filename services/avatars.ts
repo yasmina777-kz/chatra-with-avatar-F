@@ -5,7 +5,7 @@ export interface TeacherAvatar {
   teacher_id: number
   display_name?: string | null
   photo_url?: string | null
-  voice_sample_url?: string | null
+  voice?: string | null
   status: 'pending' | 'approved' | 'rejected'
   rejection_reason?: string | null
   voice_clone_warning?: string | null
@@ -37,6 +37,7 @@ export interface AvatarLecture {
   error_message?: string | null
   summary_text?: string | null
   intro_video_url?: string | null
+  outro_video_url?: string | null
   estimated_chars: number
   estimated_cost_usd: number
   created_at: string
@@ -57,7 +58,7 @@ export const useAvatarsSvc = () => {
       return data
     },
 
-    create: async (body: { display_name?: string; photo_url: string; voice_sample_url: string }): Promise<TeacherAvatar> => {
+    create: async (body: { display_name?: string; photo_url: string; voice: string }): Promise<TeacherAvatar> => {
       const { data } = await api.post('/avatars/me', body)
       return data
     },

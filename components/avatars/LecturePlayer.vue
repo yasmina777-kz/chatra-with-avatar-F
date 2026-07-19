@@ -24,17 +24,29 @@
           </button>
 
           <div class="avatar-corner" :class="{ talking: isPlaying }">
-            <video
-              v-if="currentIndex === 0 && lecture.intro_video_url"
-              :src="lecture.intro_video_url"
-              class="avatar-media"
-              autoplay
-              muted
-              playsinline
-            />
-            <img v-else-if="avatarPhotoUrl" :src="avatarPhotoUrl" class="avatar-media avatar-photo" />
-            <div v-else class="avatar-fallback">👨‍🏫</div>
-            <div class="talk-indicator" v-if="isPlaying"><span></span><span></span><span></span></div>
+            <!-- 1) Говорящее видео Wav2Lip (вступление на первом слайде или концовка на последнем) -->
+            <div v-if="showAvatarVideo" class="avatar-video-wrap">
+              <video
+                ref="introVideoEl"
+                :key="currentVideoUrl || ''"
+                :src="currentVideoUrl || undefined"
+                class="avatar-media avatar-video"
+                playsinline
+                muted
+                @ended="onIntroVideoEnded"
+              />
+            </div>
+            <!-- 2) 3D Avatar canvas -->
+            <canvas v-else-if="is3DAvatar" ref="avatarCanvasEl" class="avatar-canvas"></canvas>
+            <!-- 3) Fallback: покачивающееся фото -->
+            <div v-else class="avatar-wobble">
+              <img v-if="avatarPhotoUrl" :src="avatarPhotoUrl" class="avatar-media avatar-photo" />
+              <div v-else class="avatar-fallback">👨‍🏫</div>
+            </div>
+
+            <div class="speech-indicator" v-if="isPlaying">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
           </div>
 
           <div v-if="isFullscreen" class="fs-overlay-controls">
@@ -58,6 +70,7 @@
           </div>
         </div>
 
+        <!-- Аудио слайдов. На слайде с говорящим видео звук идёт из видео, поэтому аудио отключаем. -->
         <audio
           ref="audioEl"
           :src="currentSlide?.audio_url || undefined"
@@ -110,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import type { AvatarLectureFull } from '~/services/avatars'
 
 const props = defineProps<{ lecture: AvatarLectureFull; avatarPhotoUrl?: string | null }>()
@@ -120,9 +133,263 @@ const currentIndex = ref(0)
 const isPlaying = ref(false)
 const showSummary = ref(false)
 const audioEl = ref<HTMLAudioElement | null>(null)
+const introVideoEl = ref<HTMLVideoElement | null>(null)
 const slideAreaEl = ref<HTMLElement | null>(null)
+const avatarCanvasEl = ref<HTMLCanvasElement | null>(null)
 const slideProgressPct = ref(0)
 const isFullscreen = ref(false)
+
+const lastIndex = computed(() => props.lecture.slides.length - 1)
+
+// Какое говорящее видео показывать на текущем слайде (вступление / концовка)
+const currentVideoUrl = computed<string | null>(() => {
+  if (currentIndex.value === 0 && props.lecture.intro_video_url) return props.lecture.intro_video_url
+  if (currentIndex.value === lastIndex.value && props.lecture.outro_video_url) return props.lecture.outro_video_url
+  return null
+})
+const showAvatarVideo = computed(() => !!currentVideoUrl.value)
+
+// ── 3D Avatar ──────────────────────────────────────────────────────────────
+let THREE: any = null
+let avatarRenderer: any = null
+let avatarScene: any = null
+let avatarCamera: any = null
+let avatarHead: any = null
+let avatarAnimFrame: number = 0
+let avatarAngle = 0
+let mouthMesh: any = null
+
+const is3DAvatar = computed(() => {
+  try {
+    const parsed = JSON.parse(props.avatarPhotoUrl ?? '')
+    return parsed?.type === 'glb' || parsed?.type === 'avatar3d'
+  } catch { return false }
+})
+
+const avatarGlbUrl = computed(() => {
+  try {
+    const parsed = JSON.parse(props.avatarPhotoUrl ?? '')
+    return parsed?.url ?? ''
+  } catch { return '' }
+})
+
+const avatar3DConfig = computed(() => {
+  try {
+    const parsed = JSON.parse(props.avatarPhotoUrl ?? '')
+    return parsed?.config ?? {}
+  } catch { return {} }
+})
+
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return }
+    const s = document.createElement('script')
+    s.src = src
+    s.onload = () => resolve()
+    s.onerror = reject
+    document.head.appendChild(s)
+  })
+}
+
+async function init3DAvatar() {
+  if (!is3DAvatar.value || !avatarCanvasEl.value) return
+  await loadScript('https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js')
+  THREE = (window as any).THREE
+  if (!THREE) { console.error('Three.js не загрузился'); return }
+
+  const canvas = avatarCanvasEl.value
+  const W = 92, H = 92
+
+  avatarRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
+  avatarRenderer.setSize(W, H)
+  avatarRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  avatarRenderer.outputEncoding = THREE.sRGBEncoding
+
+  avatarScene = new THREE.Scene()
+  avatarCamera = new THREE.PerspectiveCamera(36, W / H, 0.1, 100)
+  avatarCamera.position.set(0, 0.5, 3.5)
+
+  avatarScene.add(new THREE.AmbientLight(0xffffff, 0.6))
+  const key = new THREE.DirectionalLight(0xfff8f0, 1.4)
+  key.position.set(1.5, 2, 3); avatarScene.add(key)
+  const fill = new THREE.DirectionalLight(0xd0e8ff, 0.5)
+  fill.position.set(-2, 0.5, 1); avatarScene.add(fill)
+
+  const glbUrl = avatarGlbUrl.value
+
+  if (glbUrl) {
+    await loadScript('https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/loaders/GLTFLoader.js')
+    const GLTFLoader = (window as any).THREE.GLTFLoader || (window as any).GLTFLoader
+    if (GLTFLoader) {
+      const loader = new GLTFLoader()
+      loader.load(
+        glbUrl,
+        (gltf: any) => {
+          const model = gltf.scene
+          const box = new THREE.Box3().setFromObject(model)
+          const center = box.getCenter(new THREE.Vector3())
+          const size = box.getSize(new THREE.Vector3())
+          model.position.sub(center)
+          model.position.y += size.y * 0.1
+          const scale = 2.2 / Math.max(size.x, size.y, size.z)
+          model.scale.setScalar(scale)
+          avatarScene.add(model)
+          avatarHead = model
+
+          model.traverse((node: any) => {
+            if (node.isMesh && node.morphTargetDictionary) {
+              const keys = Object.keys(node.morphTargetDictionary)
+              const mouthKey = keys.find(k =>
+                k.toLowerCase().includes('mouth') ||
+                k.toLowerCase().includes('open') ||
+                k.toLowerCase().includes('jaw') ||
+                k.toLowerCase().includes('viseme')
+              )
+              if (mouthKey !== undefined) {
+                mouthMesh = { mesh: node, key: mouthKey, idx: node.morphTargetDictionary[mouthKey] }
+              }
+            }
+          })
+        },
+        undefined,
+        (err: any) => { console.error('GLB load error:', err); build3DHead() }
+      )
+    } else {
+      build3DHead()
+    }
+  } else {
+    build3DHead()
+  }
+
+  animate3D()
+}
+
+function hexColor(hex: string) {
+  return new THREE.Color(hex)
+}
+
+const SKINS: Record<string, string> = { s1:'#FCDAB7',s2:'#F5C099',s3:'#E8A87C',s4:'#C78B5E',s5:'#9C6340',s6:'#6B3E26' }
+const HAIRS: Record<string, string> = { black:'#1a0a00',darkbrown:'#3d1c02',brown:'#7B3F00',auburn:'#922B21',blonde:'#F4D03F',gray:'#ABB2B9',white:'#F2F3F4' }
+const EYES: Record<string, string> = { brown:'#6B3A2A',green:'#2E7D32',blue:'#1565C0',gray:'#607D8B',black:'#212121' }
+
+function build3DHead() {
+  if (!THREE || !avatarScene) return
+  if (avatarHead) { avatarScene.remove(avatarHead) }
+
+  const cfg = avatar3DConfig.value
+  const skinHex = SKINS[cfg.skin] ?? '#F5C099'
+  const hairHex = HAIRS[cfg.hairColor] ?? '#3d1c02'
+  const eyeHex = EYES[cfg.eyeColor] ?? '#6B3A2A'
+  const faceScale = cfg.face === 'round' ? 1.0 : cfg.face === 'square' ? 1.1 : 0.92
+
+  const g = new THREE.Group()
+  const skinMat = new THREE.MeshStandardMaterial({ color: hexColor(skinHex), roughness: 0.65 })
+
+  const headM = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), skinMat)
+  headM.scale.set(faceScale, 1, 0.88)
+  g.add(headM)
+
+  const jawM = new THREE.Mesh(new THREE.SphereGeometry(0.78, 24, 24), skinMat)
+  jawM.scale.set(faceScale * 0.92, 0.55, 0.8)
+  jawM.position.y = -0.72
+  g.add(jawM)
+
+  const neckM = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.33, 0.55, 20), skinMat)
+  neckM.position.y = -1.32
+  g.add(neckM)
+
+  const eyeW = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.2 })
+  const irisMat = new THREE.MeshStandardMaterial({ color: hexColor(eyeHex), roughness: 0.3 })
+  const pupilMat = new THREE.MeshStandardMaterial({ color: 0x050505 })
+  ;[-0.29, 0.29].forEach(x => {
+    const ew = new THREE.Mesh(new THREE.SphereGeometry(0.148, 16, 16), eyeW)
+    ew.scale.set(1, 0.78, 0.45); ew.position.set(x, 0.14, 0.78); g.add(ew)
+    const ir = new THREE.Mesh(new THREE.SphereGeometry(0.085, 14, 14), irisMat)
+    ir.position.set(x, 0.14, 0.88); g.add(ir)
+    const pu = new THREE.Mesh(new THREE.SphereGeometry(0.042, 10, 10), pupilMat)
+    pu.position.set(x, 0.14, 0.915); g.add(pu)
+  })
+
+  const browMat = new THREE.MeshStandardMaterial({ color: hexColor(hairHex), roughness: 0.9 })
+  ;[-0.29, 0.29].forEach(x => {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.04), browMat)
+    b.position.set(x, 0.36, 0.82); b.rotation.z = x < 0 ? 0.08 : -0.08; g.add(b)
+  })
+
+  const noseMat = new THREE.MeshStandardMaterial({ color: hexColor(skinHex).multiplyScalar(0.88), roughness: 0.7 })
+  const noseM = new THREE.Mesh(new THREE.SphereGeometry(0.072, 12, 12), noseMat)
+  noseM.scale.set(0.7, 0.55, 0.8); noseM.position.set(0, -0.14, 0.9); g.add(noseM)
+
+  const lipMat = new THREE.MeshStandardMaterial({ color: hexColor(skinHex).multiplyScalar(0.75), roughness: 0.5 })
+  const upperL = new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10), lipMat)
+  upperL.scale.set(1, 0.3, 0.38); upperL.position.set(0, -0.44, 0.85); g.add(upperL)
+
+  mouthMesh = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10), lipMat)
+  mouthMesh.scale.set(1, 0.32, 0.4); mouthMesh.position.set(0, -0.54, 0.84); g.add(mouthMesh)
+
+  const earMat = new THREE.MeshStandardMaterial({ color: hexColor(skinHex).multiplyScalar(0.95), roughness: 0.7 })
+  ;[-1, 1].forEach(side => {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 14), earMat)
+    e.scale.set(0.28, 0.42, 0.22); e.position.set(side * faceScale, 0, 0); g.add(e)
+  })
+
+  if (cfg.hair && cfg.hair !== 'bald') {
+    const hairMat = new THREE.MeshStandardMaterial({ color: hexColor(hairHex), roughness: 0.85 })
+    const top = new THREE.Mesh(new THREE.SphereGeometry(1.04, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat)
+    top.scale.set(1, 0.72, 0.92); top.position.y = 0.38; g.add(top)
+    if (cfg.hair === 'long' || cfg.hair === 'medium') {
+      ;[-1, 1].forEach(side => {
+        const sh = cfg.hair === 'long' ? 1.8 : 0.72
+        const sGeo = new THREE.CylinderGeometry(0.2, 0.16, sh, 12)
+        const sm = new THREE.Mesh(sGeo, hairMat)
+        sm.position.set(side * 0.88, cfg.hair === 'long' ? -1.0 : -0.42, -0.08); g.add(sm)
+      })
+    }
+  }
+
+  g.position.y = 0.4
+  avatarScene.add(g)
+  avatarHead = g
+}
+
+function animate3D() {
+  avatarAnimFrame = requestAnimationFrame(animate3D)
+  avatarAngle += 0.004
+
+  if (avatarHead) {
+    avatarHead.rotation.y = Math.sin(avatarAngle) * 0.18
+    avatarHead.rotation.x = Math.sin(avatarAngle * 0.6) * 0.04
+
+    if (mouthMesh && isPlaying.value) {
+      if (mouthMesh.mesh && mouthMesh.idx !== undefined) {
+        const openVal = Math.abs(Math.sin(avatarAngle * 8)) * 0.7
+        mouthMesh.mesh.morphTargetInfluences[mouthMesh.idx] = openVal
+      } else if (mouthMesh.scale) {
+        const openAmount = 0.32 + Math.abs(Math.sin(avatarAngle * 8)) * 0.25
+        mouthMesh.scale.y = openAmount
+        mouthMesh.position.y = -0.54 - (openAmount - 0.32) * 0.15
+      }
+    } else if (mouthMesh) {
+      if (mouthMesh.mesh && mouthMesh.idx !== undefined) {
+        mouthMesh.mesh.morphTargetInfluences[mouthMesh.idx] = 0
+      } else if (mouthMesh.scale) {
+        mouthMesh.scale.y = 0.32
+        mouthMesh.position.y = -0.54
+      }
+    }
+  }
+
+  if (avatarRenderer && avatarScene && avatarCamera) {
+    avatarRenderer.render(avatarScene, avatarCamera)
+  }
+}
+
+const cleanup3D = () => {
+  cancelAnimationFrame(avatarAnimFrame)
+  avatarRenderer?.dispose()
+  avatarHead = null
+  mouthMesh = null
+}
 
 const toggleFullscreen = async () => {
   if (!slideAreaEl.value) return
@@ -133,7 +400,7 @@ const toggleFullscreen = async () => {
       await document.exitFullscreen()
     }
   } catch {
-    // Fullscreen API недоступен (например, в iframe без allow="fullscreen") — тихо игнорируем
+    // Fullscreen API недоступен — тихо игнорируем
   }
 }
 
@@ -155,7 +422,24 @@ const renderedSummary = computed(() => {
     .replace(/\n\n/g, '<br/><br/>')
 })
 
-const playCurrentAudio = async () => {
+// Проигрывание: на слайде с говорящим видео играем видео (в нём и звук),
+// иначе — обычное аудио слайда.
+const playCurrent = async () => {
+  if (showAvatarVideo.value) {
+    if (!introVideoEl.value) return
+    try {
+      // видео без звука + оригинальное аудио слайда: голос везде одинаковый,
+      // липсинк совпадает, т.к. видео сгенерировано из этого же аудио
+      introVideoEl.value.currentTime = 0
+      if (audioEl.value) audioEl.value.currentTime = 0
+      await introVideoEl.value.play()
+      if (audioEl.value) await audioEl.value.play()
+      isPlaying.value = true
+    } catch {
+      isPlaying.value = false
+    }
+    return
+  }
   if (!audioEl.value) return
   try {
     await audioEl.value.play()
@@ -166,12 +450,21 @@ const playCurrentAudio = async () => {
 }
 
 const togglePlay = () => {
+  if (showAvatarVideo.value) {
+    if (!introVideoEl.value) return
+    if (isPlaying.value) {
+      introVideoEl.value.pause()
+      audioEl.value?.pause()
+      isPlaying.value = false
+    } else { playCurrent() }
+    return
+  }
   if (!audioEl.value) return
   if (isPlaying.value) {
     audioEl.value.pause()
     isPlaying.value = false
   } else {
-    playCurrentAudio()
+    playCurrent()
   }
 }
 
@@ -180,6 +473,10 @@ const nextSlide = () => {
 }
 const prevSlide = () => {
   if (currentIndex.value > 0) currentIndex.value--
+}
+
+const onIntroVideoEnded = () => {
+  // видео короче/длиннее аудио — ждём окончания аудио, ничего не делаем
 }
 
 const onAudioEnded = () => {
@@ -199,17 +496,23 @@ const onLoadedMeta = () => { slideProgressPct.value = 0 }
 watch(currentIndex, () => {
   slideProgressPct.value = 0
   isPlaying.value = false
-  setTimeout(() => { if (currentSlide.value?.audio_url) playCurrentAudio() }, 150)
+  if (introVideoEl.value) { try { introVideoEl.value.pause(); introVideoEl.value.currentTime = 0 } catch {} }
+  setTimeout(() => {
+    if (showAvatarVideo.value || currentSlide.value?.audio_url) playCurrent()
+  }, 150)
 })
 
 onMounted(() => {
-  if (currentSlide.value?.audio_url) playCurrentAudio()
+  if (showAvatarVideo.value || currentSlide.value?.audio_url) playCurrent()
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  nextTick(() => { if (is3DAvatar.value && !showAvatarVideo.value) init3DAvatar() })
 })
 
 onBeforeUnmount(() => {
   audioEl.value?.pause()
+  introVideoEl.value?.pause()
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  cleanup3D()
 })
 </script>
 
@@ -233,16 +536,31 @@ onBeforeUnmount(() => {
 .slide-img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
 .slide-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 .slide-placeholder-text { color: var(--text4); font-size: 13px; }
-.avatar-corner { position: absolute; bottom: 14px; right: 14px; width: 92px; height: 92px; border-radius: 16px; overflow: hidden; border: 2px solid rgba(0,177,201,.5); box-shadow: 0 6px 20px rgba(0,0,0,.4); background: var(--surface2); display: flex; align-items: center; justify-content: center; z-index: 4; }
-.slide-area:fullscreen .avatar-corner { width: 160px; height: 160px; bottom: 110px; right: 28px; }
-.avatar-corner.talking { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(0,177,201,.2), 0 6px 20px rgba(0,0,0,.4); }
-.avatar-media { width: 100%; height: 100%; object-fit: cover; }
+.avatar-corner { position: absolute; bottom: 14px; right: 14px; width: 92px; border-radius: 16px; overflow: visible; display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 4; }
+.slide-area:fullscreen .avatar-corner { width: 160px; bottom: 110px; right: 28px; }
+
+.avatar-video-wrap { width: 100%; aspect-ratio: 1; border-radius: 16px; overflow: hidden; border: 2px solid rgba(0,177,201,.5); box-shadow: 0 6px 20px rgba(0,0,0,.4); background: #000; }
+.avatar-corner.talking .avatar-video-wrap { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(0,177,201,.2), 0 6px 20px rgba(0,0,0,.4); }
+.avatar-video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+
+.avatar-wobble { width: 100%; aspect-ratio: 1; border-radius: 16px; overflow: hidden; border: 2px solid rgba(0,177,201,.5); box-shadow: 0 6px 20px rgba(0,0,0,.4); background: var(--surface2); display: flex; align-items: center; justify-content: center; transition: border-color .3s; }
+.avatar-corner.talking .avatar-wobble { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(0,177,201,.2), 0 6px 20px rgba(0,0,0,.4); }
+
+.avatar-canvas { width: 100%; height: 100%; display: block; border-radius: 14px; }
+.avatar-photo { width: 100%; height: 100%; object-fit: cover; }
 .avatar-fallback { font-size: 40px; }
-.talk-indicator { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); display: flex; gap: 3px; }
-.talk-indicator span { width: 4px; height: 4px; border-radius: 50%; background: var(--teal); animation: pulse-talk 1s infinite; }
-.talk-indicator span:nth-child(2) { animation-delay: .15s; }
-.talk-indicator span:nth-child(3) { animation-delay: .3s; }
-@keyframes pulse-talk { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+
+.speech-indicator { display: flex; align-items: flex-end; gap: 3px; height: 20px; padding: 2px 8px; background: rgba(0,0,0,.55); border-radius: 100px; backdrop-filter: blur(6px); }
+.speech-indicator span { width: 3px; border-radius: 3px; background: var(--teal); animation: speechWave 1s ease-in-out infinite; }
+.speech-indicator span:nth-child(1) { animation-delay: 0s; }
+.speech-indicator span:nth-child(2) { animation-delay: .1s; }
+.speech-indicator span:nth-child(3) { animation-delay: .2s; }
+.speech-indicator span:nth-child(4) { animation-delay: .1s; }
+.speech-indicator span:nth-child(5) { animation-delay: 0s; }
+@keyframes speechWave {
+  0%, 100% { height: 4px; opacity: .5; }
+  50% { height: 16px; opacity: 1; }
+}
 .progress-row { display: flex; gap: 4px; }
 .progress-seg { flex: 1; height: 4px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; background: var(--teal); transition: width .15s linear; }

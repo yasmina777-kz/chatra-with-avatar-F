@@ -270,6 +270,9 @@
                   <button class="btn btn-blue btn-sm" :disabled="avatarActionLoading===a.id" @click="approveAvatar(a)">Одобрить</button>
                   <button class="btn btn-ghost btn-sm" :disabled="avatarActionLoading===a.id" @click="rejectAvatarPrompt(a)">Отклонить</button>
                 </template>
+                <button class="btn btn-icon btn-danger btn-sm" :disabled="avatarActionLoading===a.id" @click="removeAvatar(a)" title="Удалить аватара">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+                </button>
               </div>
             </div>
           </div>
@@ -504,6 +507,20 @@ const rejectAvatarPrompt = async (a: TeacherAvatar) => {
     toast.ok('Заявка отклонена')
   } catch (e: any) {
     toast.err(e?.response?.data?.detail || 'Не удалось отклонить заявку')
+  } finally {
+    avatarActionLoading.value = null
+  }
+}
+
+const removeAvatar = async (a: TeacherAvatar) => {
+  if (!window.confirm(`Удалить аватара «${a.display_name || 'без имени'}»? Это действие нельзя отменить.`)) return
+  avatarActionLoading.value = a.id
+  try {
+    await avatarsSvc.adminDeleteAvatar(a.id)
+    avatarsList.value = avatarsList.value.filter(x => x.id !== a.id)
+    toast.ok('Аватар удалён')
+  } catch (e: any) {
+    toast.err(e?.response?.data?.detail || 'Не удалось удалить аватара')
   } finally {
     avatarActionLoading.value = null
   }

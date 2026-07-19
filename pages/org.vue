@@ -4,13 +4,15 @@
 
     <div class="org-content">
       <!-- Logo -->
-      <div class="org-brand">
-        <img src="/logo.png" class="org-logo" alt="Chatra" />
+      <div class="org-brand anim-in">
+        <div class="org-logo-glow">
+          <img src="/logo.png" class="org-logo" alt="Chatra" />
+        </div>
         <span class="org-brand-name">Chatra</span>
       </div>
 
       <!-- Lang switcher -->
-      <div class="lang-row">
+      <div class="lang-row anim-in" style="animation-delay:.05s">
         <button v-for="l in langs" :key="l.code"
           :class="['lang-btn', { active: lang === l.code }]"
           @click="setLang(l.code as any)">
@@ -20,12 +22,17 @@
 
       <!-- Card -->
       <div class="org-card anim-scale">
+        <div class="org-pulse-badge">
+          <span class="pulse-dot"></span>
+          {{ lang === 'ru' ? 'Платформа нового поколения' : lang === 'kk' ? 'Жаңа буын платформасы' : 'Next-gen platform' }}
+        </div>
+
         <h1 class="org-title">{{ lang === 'ru' ? 'Добро пожаловать' : lang === 'kk' ? 'Қош келдіңіз' : 'Welcome' }}</h1>
         <p class="org-sub">{{ lang === 'ru' ? 'Выберите тип вашей организации' : lang === 'kk' ? 'Ұйым түрін таңдаңыз' : 'Select your organization type' }}</p>
 
         <div class="org-options">
           <!-- University -->
-          <button class="org-option university" @click="select('university')">
+          <button class="org-option university" :disabled="loadingType !== null" @click="select('university')">
             <div class="org-option-icon university-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8">
                 <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
@@ -36,13 +43,14 @@
               <div class="org-option-title">{{ lang === 'ru' ? 'Университет' : lang === 'kk' ? 'Университет' : 'University' }}</div>
               <div class="org-option-sub">{{ lang === 'ru' ? 'Высшее образование' : lang === 'kk' ? 'Жоғары білім' : 'Higher education' }}</div>
             </div>
-            <svg class="org-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <div v-if="loadingType === 'university'" class="org-spinner"></div>
+            <svg v-else class="org-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 18l6-6-6-6"/>
             </svg>
           </button>
 
           <!-- School -->
-          <button class="org-option school" @click="select('school')">
+          <button class="org-option school" :disabled="loadingType !== null" @click="select('school')">
             <div class="org-option-icon school-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8">
                 <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
@@ -53,12 +61,17 @@
               <div class="org-option-title">{{ lang === 'ru' ? 'Школа' : lang === 'kk' ? 'Мектеп' : 'School' }}</div>
               <div class="org-option-sub">{{ lang === 'ru' ? 'Среднее образование' : lang === 'kk' ? 'Орта білім' : 'Secondary education' }}</div>
             </div>
-            <svg class="org-arrow school-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <div v-if="loadingType === 'school'" class="org-spinner school-spinner"></div>
+            <svg v-else class="org-arrow school-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 18l6-6-6-6"/>
             </svg>
           </button>
         </div>
       </div>
+
+      <p class="org-footnote anim-in" style="animation-delay:.15s">
+        {{ lang === 'ru' ? 'Можно изменить позже в настройках' : lang === 'kk' ? 'Кейінірек баптауларда өзгертуге болады' : 'You can change this later in settings' }}
+      </p>
     </div>
   </div>
 </template>
@@ -72,6 +85,7 @@ definePageMeta({ layout: false })
 
 const org = useOrgStore()
 const { lang, setLang } = useI18n()
+const loadingType = ref<'university' | 'school' | null>(null)
 
 const langs = [
   { code: 'ru', label: 'RU' },
@@ -80,8 +94,12 @@ const langs = [
 ]
 
 const select = (type: 'university' | 'school') => {
+  if (loadingType.value) return
+  loadingType.value = type
   org.select(type)
-  if (import.meta.client) window.location.href = '/login'
+  if (import.meta.client) {
+    setTimeout(() => { window.location.href = '/login' }, 380)
+  }
 }
 
 // ── Particle canvas background (same style as auth layout) ────────────────────
@@ -180,10 +198,32 @@ onMounted(() => {
   gap: 12px;
   margin-bottom: 28px;
 }
+.org-logo-glow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.org-logo-glow::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 16px;
+  background: radial-gradient(circle, rgba(0,177,201,.5), transparent 70%);
+  filter: blur(10px);
+  animation: logoGlowPulse 3s ease-in-out infinite;
+  z-index: 0;
+}
+@keyframes logoGlowPulse {
+  0%,100% { opacity: .5; transform: scale(1); }
+  50% { opacity: .9; transform: scale(1.15); }
+}
 .org-logo {
   width: 44px;
   height: 44px;
   border-radius: 12px;
+  position: relative;
+  z-index: 1;
 }
 .org-brand-name {
   font-family: 'Outfit', sans-serif;
@@ -191,6 +231,54 @@ onMounted(() => {
   font-weight: 900;
   color: #fff;
   letter-spacing: -.04em;
+}
+
+/* Pulse badge */
+.org-pulse-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: center;
+  margin: 0 auto 18px;
+  padding: 6px 14px;
+  border-radius: 100px;
+  background: rgba(0,177,201,.12);
+  border: 1px solid rgba(0,177,201,.3);
+  color: #5fd4e8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #00B1C9;
+  animation: pulse 1.6s infinite;
+  flex-shrink: 0;
+}
+
+/* Footnote */
+.org-footnote {
+  margin-top: 22px;
+  font-size: 12px;
+  color: rgba(255,255,255,.35);
+  text-align: center;
+}
+
+/* Spinner */
+.org-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(0,177,201,.25);
+  border-top-color: #00B1C9;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  flex-shrink: 0;
+}
+.school-spinner {
+  border-color: rgba(245,158,11,.25);
+  border-top-color: #F59E0B;
 }
 
 /* Lang row */
@@ -256,15 +344,28 @@ onMounted(() => {
   border-radius: 20px;
   border: 1.5px solid transparent;
   cursor: pointer;
-  transition: all .22s;
+  transition: all .22s cubic-bezier(.16,1,.3,1);
   text-align: left;
   font-family: inherit;
   background: rgba(255,255,255,.06);
+  position: relative;
+  overflow: hidden;
 }
+.org-option::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -120%;
+  width: 60%; height: 100%;
+  background: linear-gradient(110deg, transparent, rgba(255,255,255,.08), transparent);
+  transition: left .55s cubic-bezier(.16,1,.3,1);
+  pointer-events: none;
+}
+.org-option:hover::before { left: 130%; }
+.org-option:disabled { cursor: default; opacity: .6; }
 .university {
   border-color: rgba(0,177,201,.3);
 }
-.university:hover {
+.university:hover:not(:disabled) {
   background: rgba(0,177,201,.1);
   border-color: rgba(0,177,201,.6);
   transform: translateY(-2px);
@@ -273,7 +374,7 @@ onMounted(() => {
 .school {
   border-color: rgba(245,158,11,.3);
 }
-.school:hover {
+.school:hover:not(:disabled) {
   background: rgba(245,158,11,.1);
   border-color: rgba(245,158,11,.6);
   transform: translateY(-2px);
