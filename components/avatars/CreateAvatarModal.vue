@@ -8,7 +8,7 @@
           </div>
           <div>
             <div class="modal-title">Создать AI-аватара</div>
-            <div class="modal-sub">Он будет читать лекции выбранным голосом</div>
+            <div class="modal-sub">3D-аватар будет читать лекции выбранным голосом</div>
           </div>
         </div>
         <button class="btn btn-icon btn-ghost" @click="$emit('close')">
@@ -27,25 +27,48 @@
           <input v-model="displayName" class="inp" placeholder="Например: Айгерим Сериковна" />
         </div>
 
-        <!-- Видео/фото учителя для Wav2Lip -->
+        <!-- Шаг 1: выбрать аватара из библиотеки -->
         <div class="field">
-          <label class="field-label">Видео или фото для аватара *</label>
-          <div v-if="!mediaFile && !mediaUrl" class="file-drop" @click="mediaInput?.click()">
-            <input type="file" ref="mediaInput" style="display:none" accept="video/mp4,video/webm,image/png,image/jpeg,image/webp" @change="onMediaPick" />
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="drop-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
-            <span class="drop-text">Загрузите короткое видео лица <strong>(30–60 сек, смотрите прямо в камеру)</strong></span>
-            <span class="drop-hint">MP4, WEBM или фото (JPG/PNG). Видео даёт естественные движения — губы аватар подстроит под речь.</span>
+          <label class="field-label"><span class="step-badge">1</span> Выберите аватара</label>
+          <div class="avatar-gallery">
+            <button
+              v-for="a in AVATAR_LIBRARY"
+              :key="a.id"
+              class="gallery-card"
+              :class="{ active: selectedLibraryId === a.id }"
+              type="button"
+              @click="pickFromLibrary(a)"
+            >
+              <div class="gallery-thumb">
+                <img v-if="a.preview" :src="a.preview" :alt="a.name" />
+                <VrmAvatar v-else :vrm-url="a.url" :speaking="false" />
+              </div>
+              <span class="gallery-name">{{ a.name }}</span>
+            </button>
           </div>
-          <div v-else class="preview-row">
-            <video v-if="isVideo" :src="mediaPreview" class="photo-preview" muted playsinline />
-            <img v-else :src="mediaPreview" class="photo-preview" />
-            <button class="btn-rm-sm" @click="resetMedia">Заменить</button>
+
+          <!-- Живой 3D-превью выбранного -->
+          <div v-if="previewUrl" class="vrm-preview">
+            <VrmAvatar :vrm-url="previewUrl" :speaking="false" />
+          </div>
+
+          <!-- Свой файл -->
+          <div class="own-file-row">
+            <input type="file" ref="vrmInput" style="display:none" accept=".vrm" @change="onVrmPick" />
+            <button class="btn-own" type="button" @click="vrmInput?.click()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Загрузить свой .vrm
+            </button>
+            <span v-if="vrmFile" class="own-file-name">{{ vrmFile.name }}</span>
+            <a href="https://vroid.com/en/studio" target="_blank" rel="noopener" class="link-teal own-hint">
+              Создать свою модель
+            </a>
           </div>
         </div>
 
         <!-- Выбор голоса Azure -->
         <div class="field">
-          <label class="field-label">Голос аватара *</label>
+          <label class="field-label"><span class="step-badge">2</span> Голос аватара *</label>
           <select v-model="selectedVoice" class="inp">
             <option v-for="v in VOICES" :key="v.id" :value="v.id">{{ v.label }}</option>
           </select>
@@ -74,6 +97,7 @@ import { ref, computed } from 'vue'
 import { useToast } from '~/composables/useToast'
 import { useUploadSvc } from '~/services/uploads'
 import { useAvatarsSvc } from '~/services/avatars'
+import VrmAvatar from './VrmAvatar.vue'
 
 const emit = defineEmits<{ close: []; created: [a: any] }>()
 
@@ -91,21 +115,42 @@ const VOICES = [
 ]
 const selectedVoice = ref(VOICES[0].id)
 
-const mediaInput = ref<HTMLInputElement | null>(null)
-const mediaFile = ref<File | null>(null)
-const mediaUrl = ref('')
-const isVideo = computed(() => {
-  if (mediaFile.value) return mediaFile.value.type.startsWith('video')
-  return /\.(mp4|webm|mov)(\?|$)/i.test(mediaUrl.value)
-})
-const mediaPreview = computed(() => mediaFile.value ? URL.createObjectURL(mediaFile.value) : mediaUrl.value)
-const onMediaPick = (e: Event) => {
-  const f = (e.target as HTMLInputElement).files?.[0]
-  if (f) mediaFile.value = f
-}
-const resetMedia = () => { mediaFile.value = null; mediaUrl.value = '' }
+// ── Библиотека готовых аватаров ────────────────────────────────
+// Файлы .vrm лежат в public/avatars/, превью-картинки (опционально) — там же.
+const AVATAR_LIBRARY = [
+  { id: 'allo21',   name: 'Алло',            url: '/avatars/allo21.vrm',   preview: '' },
+  { id: 'teacher1', name: 'Преподаватель 1', url: '/avatars/teacher2.vrm', preview: '' },
+  // Добавляй сюда следующих преподавателей:
+  // { id: 'teacher2', name: 'Айгерим', url: '/avatars/teacher2.vrm', preview: '/avatars/teacher2.png' },
+]
 
-const canSubmit = computed(() => !!(mediaFile.value || mediaUrl.value) && !!selectedVoice.value)
+const selectedLibraryId = ref<string | null>(null)
+const selectedLibraryUrl = ref<string>('')
+
+const vrmInput = ref<HTMLInputElement | null>(null)
+const vrmFile = ref<File | null>(null)
+
+const pickFromLibrary = (a: { id: string; url: string }) => {
+  selectedLibraryId.value = a.id
+  selectedLibraryUrl.value = a.url
+  vrmFile.value = null            // выбор из библиотеки отменяет свой файл
+}
+
+const onVrmPick = (e: Event) => {
+  const f = (e.target as HTMLInputElement).files?.[0]
+  if (f) {
+    vrmFile.value = f
+    selectedLibraryId.value = null // свой файл отменяет выбор из библиотеки
+    selectedLibraryUrl.value = ''
+  }
+}
+
+// живой превью: свой файл (blob) или модель из библиотеки
+const previewUrl = computed(() =>
+  vrmFile.value ? URL.createObjectURL(vrmFile.value) : selectedLibraryUrl.value || ''
+)
+
+const canSubmit = computed(() => (!!vrmFile.value || !!selectedLibraryUrl.value) && !!selectedVoice.value)
 
 const loading = ref(false)
 const uploading = ref(false)
@@ -117,17 +162,17 @@ const submit = async () => {
   uploading.value = true
   uploadPct.value = 15
   try {
-    let finalMediaUrl = mediaUrl.value
-    if (mediaFile.value) {
-      const { file_url } = await uploadSvc.upload(mediaFile.value)
-      finalMediaUrl = file_url
+    let finalVrmUrl: string | undefined = selectedLibraryUrl.value || undefined
+    if (vrmFile.value) {
+      const { file_url } = await uploadSvc.upload(vrmFile.value)
+      finalVrmUrl = file_url
     }
-    uploadPct.value = 80
+    uploadPct.value = 85
 
     const avatar = await avatarsSvc.create({
       display_name: displayName.value || undefined,
-      photo_url: finalMediaUrl,          // сюда теперь может лечь видео или фото
       voice: selectedVoice.value,
+      vrm_url: finalVrmUrl,
     })
     uploadPct.value = 100
     toast.ok('Заявка отправлена на одобрение администратору')
@@ -173,6 +218,36 @@ const submit = async () => {
 .photo-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border2); }
 .btn-rm-sm { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 12px; font-size: 12px; color: var(--text3); cursor: pointer; transition: all .15s; }
 .btn-rm-sm:hover { background: var(--surface3); color: var(--text1); }
+
+.avatar-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.gallery-card { background: var(--surface2); border: 2px solid var(--border); border-radius: var(--r-lg); padding: 8px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: all .15s; }
+.gallery-card:hover { border-color: rgba(0,177,201,.45); }
+.gallery-card.active { border-color: var(--teal); background: rgba(0,177,201,.08); }
+.gallery-thumb { width: 100%; aspect-ratio: 1; border-radius: var(--r-md); overflow: hidden; background: var(--surface3); display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.gallery-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-thumb-ph { font-size: 26px; }
+.gallery-name { font-size: 11px; font-weight: 600; color: var(--text2); }
+
+.vrm-preview { height: 200px; margin-top: 10px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface2); overflow: hidden; }
+
+.own-file-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.btn-own { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--r-md); background: var(--surface2); border: 1px solid var(--border); color: var(--text2); font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; }
+.btn-own:hover { background: var(--surface3); color: var(--text1); }
+.own-file-name { font-size: 12px; color: var(--teal); }
+.own-hint { font-size: 11px; margin-left: auto; }
+
+.step-card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px; }
+.step-row { display: flex; gap: 12px; align-items: flex-start; }
+.step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--teal); color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.step-body { flex: 1; }
+.step-title { font-size: 13px; font-weight: 700; color: var(--text1); }
+.step-sub { font-size: 12px; color: var(--text4); margin: 3px 0 10px; line-height: 1.5; }
+.step-badge { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; background: var(--teal); color: #fff; font-size: 10px; font-weight: 800; margin-right: 5px; }
+.btn-open-creator { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: var(--r-md); background: var(--teal); color: #fff; font-size: 12px; font-weight: 700; text-decoration: none; transition: opacity .15s; }
+.btn-open-creator:hover { opacity: .88; }
+
+.link-teal { color: var(--teal); text-decoration: underline; }
+.file-name { font-size: 13px; color: var(--text1); flex: 1; }
 
 .upload-progress { display: flex; flex-direction: column; gap: 5px; }
 .upload-bar-wrap { height: 3px; background: var(--border); border-radius: 3px; overflow: hidden; }

@@ -6,14 +6,33 @@
           <div class="ph-title">{{ lecture.title }}</div>
           <div class="ph-sub">Слайд {{ currentIndex + 1 }} из {{ lecture.slides.length }}</div>
         </div>
-        <button class="btn btn-icon btn-ghost" @click="$emit('close')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
-        </button>
+        <div class="ph-actions">
+          <button v-if="canDelete" class="btn-del" title="Удалить лекцию" :disabled="deleting" @click="removeLecture">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+            </svg>
+          </button>
+          <button class="btn btn-icon btn-ghost" @click="$emit('close')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
       </div>
 
       <div v-if="!showSummary" class="stage">
         <div class="slide-area" ref="slideAreaEl" :class="{ 'is-fullscreen': isFullscreen }">
-          <img v-if="currentSlide?.slide_image_url" :src="currentSlide.slide_image_url" class="slide-img" />
+          <!-- Приветствие / прощание: аватар крупно на всю область -->
+          <video
+            v-if="showAvatarVideo"
+            ref="introVideoEl"
+            :key="currentVideoUrl || ''"
+            :src="currentVideoUrl || undefined"
+            class="stage-video"
+            playsinline
+            muted
+            @ended="onIntroVideoEnded"
+          />
+          <img v-else-if="currentSlide?.slide_image_url" :src="currentSlide.slide_image_url" class="slide-img" />
           <div v-else class="slide-placeholder">
             <div class="slide-placeholder-text">Слайд готовится...</div>
           </div>
@@ -23,24 +42,16 @@
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"/></svg>
           </button>
 
-          <div class="avatar-corner" :class="{ talking: isPlaying }">
-            <!-- 1) Говорящее видео Wav2Lip (вступление на первом слайде или концовка на последнем) -->
-            <div v-if="showAvatarVideo" class="avatar-video-wrap">
-              <video
-                ref="introVideoEl"
-                :key="currentVideoUrl || ''"
-                :src="currentVideoUrl || undefined"
-                class="avatar-media avatar-video"
-                playsinline
-                muted
-                @ended="onIntroVideoEnded"
-              />
+          <div v-if="!showAvatarVideo" class="avatar-corner" :class="{ talking: isPlaying }">
+            <!-- 3D VRM-аватар (говорит всю лекцию, рендер в браузере) -->
+            <div v-if="vrmUrl" class="avatar-vrm-wrap">
+              <VrmAvatar :vrm-url="vrmUrl" :audio-el="audioEl" :speaking="isPlaying" />
             </div>
-            <!-- 2) 3D Avatar canvas -->
+            <!-- 3D Avatar canvas -->
             <canvas v-else-if="is3DAvatar" ref="avatarCanvasEl" class="avatar-canvas"></canvas>
-            <!-- 3) Fallback: покачивающееся фото -->
+            <!-- Статичное фото преподавателя -->
             <div v-else class="avatar-wobble">
-              <img v-if="avatarPhotoUrl" :src="avatarPhotoUrl" class="avatar-media avatar-photo" />
+              <img v-if="photoUrl" :src="photoUrl" class="avatar-media avatar-photo" />
               <div v-else class="avatar-fallback">👨‍🏫</div>
             </div>
 
@@ -125,9 +136,36 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import type { AvatarLectureFull } from '~/services/avatars'
+import { useAvatarsSvc } from '~/services/avatars'
+import { useToast } from '~/composables/useToast'
+import VrmAvatar from './VrmAvatar.vue'
 
-const props = defineProps<{ lecture: AvatarLectureFull; avatarPhotoUrl?: string | null }>()
-const emit = defineEmits<{ close: [] }>()
+const avatarsSvc = useAvatarsSvc()
+const toast = useToast()
+
+const props = defineProps<{
+  lecture: AvatarLectureFull
+  avatarPhotoUrl?: string | null
+  avatarVrmUrl?: string | null // ссылка на 3D-модель .vrm (avatar.voice_sample_url)
+  canDelete?: boolean          // передай true для автора лекции/админа
+}>()
+const emit = defineEmits<{ close: []; deleted: [id: number] }>()
+
+const deleting = ref(false)
+const removeLecture = async () => {
+  if (!confirm(`Удалить лекцию «${props.lecture.title}»? Это действие необратимо.`)) return
+  deleting.value = true
+  try {
+    await avatarsSvc.deleteLecture(props.lecture.id)
+    toast.ok('Лекция удалена')
+    emit('deleted', props.lecture.id)
+    emit('close')
+  } catch (e: any) {
+    toast.err(e?.response?.data?.detail || 'Не удалось удалить лекцию')
+  } finally {
+    deleting.value = false
+  }
+}
 
 const currentIndex = ref(0)
 const isPlaying = ref(false)
@@ -140,6 +178,10 @@ const slideProgressPct = ref(0)
 const isFullscreen = ref(false)
 
 const lastIndex = computed(() => props.lecture.slides.length - 1)
+
+// Ссылки на медиа аватара: сначала проп, иначе — то, что пришло вместе с лекцией
+const vrmUrl = computed(() => props.avatarVrmUrl || (props.lecture as any).avatar_vrm_url || null)
+const photoUrl = computed(() => props.avatarPhotoUrl || (props.lecture as any).avatar_photo_url || null)
 
 // Какое говорящее видео показывать на текущем слайде (вступление / концовка)
 const currentVideoUrl = computed<string | null>(() => {
@@ -505,7 +547,7 @@ watch(currentIndex, () => {
 onMounted(() => {
   if (showAvatarVideo.value || currentSlide.value?.audio_url) playCurrent()
   document.addEventListener('fullscreenchange', onFullscreenChange)
-  nextTick(() => { if (is3DAvatar.value && !showAvatarVideo.value) init3DAvatar() })
+  nextTick(() => { if (is3DAvatar.value && !showAvatarVideo.value && !vrmUrl.value) init3DAvatar() })
 })
 
 onBeforeUnmount(() => {
@@ -522,6 +564,10 @@ onBeforeUnmount(() => {
 .player-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .ph-title { font-family: 'Outfit',sans-serif; font-size: 16px; font-weight: 800; color: var(--text1); }
 .ph-sub { font-size: 12px; color: var(--text4); margin-top: 2px; }
+.ph-actions { display: flex; align-items: center; gap: 8px; }
+.btn-del { width: 34px; height: 34px; border-radius: var(--r-md); background: var(--surface2); border: 1px solid var(--border); color: var(--text4); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s; }
+.btn-del:hover:not(:disabled) { color: var(--red); border-color: var(--red); background: rgba(248,113,113,.08); }
+.btn-del:disabled { opacity: .4; cursor: not-allowed; }
 .stage { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
 .slide-area { position: relative; width: 100%; aspect-ratio: 16/9; background: #0b1220; border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--border); }
 .slide-area.is-fullscreen { border-radius: 0; aspect-ratio: unset; width: 100vw; height: 100vh; }
@@ -534,6 +580,7 @@ onBeforeUnmount(() => {
 .fs-progress-row { display: flex; gap: 4px; }
 .fs-controls-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .slide-img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.stage-video { width: 100%; height: 100%; object-fit: contain; display: block; background: #0b1220; }
 .slide-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 .slide-placeholder-text { color: var(--text4); font-size: 13px; }
 .avatar-corner { position: absolute; bottom: 14px; right: 14px; width: 92px; border-radius: 16px; overflow: visible; display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 4; }
@@ -546,6 +593,8 @@ onBeforeUnmount(() => {
 .avatar-wobble { width: 100%; aspect-ratio: 1; border-radius: 16px; overflow: hidden; border: 2px solid rgba(0,177,201,.5); box-shadow: 0 6px 20px rgba(0,0,0,.4); background: var(--surface2); display: flex; align-items: center; justify-content: center; transition: border-color .3s; }
 .avatar-corner.talking .avatar-wobble { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(0,177,201,.2), 0 6px 20px rgba(0,0,0,.4); }
 
+.avatar-vrm-wrap { width: 100%; aspect-ratio: 1; border-radius: 16px; overflow: hidden; border: 2px solid rgba(0,177,201,.5); box-shadow: 0 6px 20px rgba(0,0,0,.4); background: var(--surface2); }
+.avatar-corner.talking .avatar-vrm-wrap { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(0,177,201,.2), 0 6px 20px rgba(0,0,0,.4); }
 .avatar-canvas { width: 100%; height: 100%; display: block; border-radius: 14px; }
 .avatar-photo { width: 100%; height: 100%; object-fit: cover; }
 .avatar-fallback { font-size: 40px; }
