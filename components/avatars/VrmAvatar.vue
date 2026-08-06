@@ -28,6 +28,7 @@ const props = defineProps<{
   vrmUrl: string
   audioEl?: HTMLAudioElement | null   // элемент <audio>, под который открывается рот
   speaking?: boolean                  // идёт ли сейчас речь
+  yOffset?: number                    // ручная поправка положения по вертикали (для конкретной модели)
 }>()
 
 const hostEl = ref<HTMLElement | null>(null)
@@ -50,15 +51,55 @@ let nextBlink = 2 + Math.random() * 3
 let baseRotY = 0
 let baseRotX = 0
 let doubleBlink = false
+let mouthEase = 0 // плавно подтягивается к цели — убирает резкие скачки рта
 const lookTarget = new THREE.Vector3()
 const lookObj = new THREE.Object3D()
 
-function mouthOpenValue(t: number): number {
-  // два наложенных ритма дают естественную "речь"
-  const a = Math.sin(t * 7.0) * 0.5 + 0.5
-  const b = Math.sin(t * 3.1 + 1.7) * 0.5 + 0.5
-  const c = Math.sin(t * 1.5 + 0.6) * 0.5 + 0.5
-  return Math.min(1, (a * 0.55 + b * 0.30 + c * 0.15) * 1.15)
+// ── Случайная, неповторяющаяся "речь" вместо чистой синусоиды ──────
+// Периодически выбираем новую случайную цель для открытия рта (с паузами —
+// полным закрытием) и плавно тянемся к ней. Так движение не выглядит
+// механически-периодичным, как у робота, и рот реально успевает закрываться.
+let mouthTarget = 0
+let mouthPickTimer = 0
+let mouthPickInterval = 0.16
+let currentViseme: 'aa' | 'ih' | 'ou' = 'aa'
+let aaEase = 0
+let ihEase = 0
+let ouEase = 0
+
+// ── Естественное, неповторяющееся движение головы ──────────────────
+// Вместо чистых синусов (что выглядит как метроном/робот) — случайные
+// цели поворота, к которым голова плавно "дрейфует", как у живого человека.
+let headYawTarget = 0
+let headPitchTarget = 0
+let headRollTarget = 0
+let headYawNow = 0
+let headPitchNow = 0
+let headRollNow = 0
+let headPickTimer = 0
+let headPickInterval = 2.2
+
+function pickNewHeadTarget() {
+  headYawTarget = (Math.random() - 0.5) * 0.22
+  headPitchTarget = (Math.random() - 0.5) * 0.10
+  headRollTarget = (Math.random() - 0.5) * 0.06
+  headPickInterval = 1.6 + Math.random() * 2.2
+}
+
+function pickNewMouthTarget() {
+  const r = Math.random()
+  if (r < 0.22) {
+    mouthTarget = 0            // "смычка"/пауза — рот на мгновение закрыт
+  } else if (r < 0.4) {
+    mouthTarget = 0.25 + Math.random() * 0.25   // лёгкое приоткрытие
+  } else {
+    mouthTarget = 0.6 + Math.random() * 0.4     // полноценный гласный звук
+  }
+  // выбираем, какая форма рта сейчас "звучит" — реально разные гласные,
+  // а не одна и та же форма A с небольшой примесью
+  const vr = Math.random()
+  currentViseme = vr < 0.45 ? 'aa' : vr < 0.72 ? 'ih' : 'ou'
+  mouthPickInterval = 0.12 + Math.random() * 0.15
 }
 
 async function init() {
@@ -120,8 +161,12 @@ async function init() {
     const radius = Math.max(size.x, size.y, size.z) * 0.5 || 0.5
     const fovRad = (camera.fov * Math.PI) / 180
     // FIT_MARGIN: больше значение — камера дальше (модель мельче)
-    const FIT_MARGIN = 1.35
+    const FIT_MARGIN = 1.15
     const distance = (radius / Math.sin(fovRad / 2)) * FIT_MARGIN
+
+    // ручная поправка по вертикали для конкретной модели (если задана)
+    const yAdj = (props.yOffset ?? 0) * size.y
+    center.y += yAdj
 
     camera.near = Math.max(0.01, distance - radius * 3)
     camera.far = distance + radius * 10
@@ -162,18 +207,41 @@ function animate() {
     // ── Речь: чередуем реальные формы рта + лёгкая мимика
     if (em) {
       const talking = !!props.speaking
-      const vol = talking ? mouthOpenValue(t) : 0
-      const boosted = Math.min(1, vol * 1.6)
+
+      if (talking) {
+        mouthPickTimer += dt
+        if (mouthPickTimer > mouthPickInterval) {
+          mouthPickTimer = 0
+          pickNewMouthTarget()
+        }
+      } else {
+        mouthTarget = 0
+        mouthPickTimer = 0
+      }
+
+      // Плавно тянемся к случайно выбранной цели — быстрее к открытому,
+      // чуть медленнее к закрытому, для естественности.
+      const easeSpeed = mouthTarget > mouthEase ? 14 : 9
+      mouthEase += (mouthTarget - mouthEase) * Math.min(1, dt * easeSpeed)
+      const boosted = mouthEase
 
       // Плавно смешиваем формы рта синусами разной фазы — без резких порогов,
       // поэтому переход выглядит как естественная артикуляция, а не переключатель.
-      const aaAmt = boosted * (0.55 + 0.45 * Math.max(0, Math.sin(t * 3.4)))
-      const ihAmt = boosted * 0.45 * Math.max(0, Math.sin(t * 2.3 + 2.1))
-      const ouAmt = boosted * 0.4 * Math.max(0, Math.sin(t * 1.8 + 4.2))
+      // aa — главная форма, идёт на полную амплитуду без искусственного потолка
+      // Каждая гласная плавно "включается", когда она текущая, и плавно
+      // "выключается", когда очередь переходит к другой — форма рта реально
+      // меняется (A / I / U), а не всегда одна и та же с примесью.
+      const visemeEaseSpeed = 10
+      const aaGoal = currentViseme === 'aa' ? boosted : 0
+      const ihGoal = currentViseme === 'ih' ? boosted : 0
+      const ouGoal = currentViseme === 'ou' ? boosted : 0
+      aaEase += (aaGoal - aaEase) * Math.min(1, dt * visemeEaseSpeed)
+      ihEase += (ihGoal - ihEase) * Math.min(1, dt * visemeEaseSpeed)
+      ouEase += (ouGoal - ouEase) * Math.min(1, dt * visemeEaseSpeed)
 
-      em.setValue('aa', aaAmt)
-      em.setValue('ih', ihAmt)
-      em.setValue('ou', ouAmt)
+      em.setValue('aa', aaEase)
+      em.setValue('ih', ihEase)
+      em.setValue('ou', ouEase)
       em.setValue('ee', 0)
 
       // едва заметная улыбка, слегка «дышит» во время речи
@@ -197,12 +265,26 @@ function animate() {
       }
     }
 
-    // ── Движения: голова + корпус + «дыхание»
-    const yaw = Math.sin(t * 0.32) * 0.09 + Math.sin(t * 0.13 + 1.1) * 0.04
-    const pitch = Math.sin(t * 0.24 + 0.4) * 0.04
-    const roll = Math.sin(t * 0.18 + 2.2) * 0.025
-    // редкие «акценты» — короткий кивок во время речи
-    const nod = props.speaking ? Math.max(0, Math.sin(t * 1.6 - 1.2)) ** 6 * 0.08 : 0
+    // ── Движения: голова + корпус + «дыхание» — случайный дрейф, не метроном
+    headPickTimer += dt
+    if (headPickTimer > headPickInterval) {
+      headPickTimer = 0
+      pickNewHeadTarget()
+    }
+    // во время речи голова чуть активнее "живёт"
+    const headEase = props.speaking ? 2.2 : 1.3
+    headYawNow += (headYawTarget - headYawNow) * Math.min(1, dt * headEase)
+    headPitchNow += (headPitchTarget - headPitchNow) * Math.min(1, dt * headEase)
+    headRollNow += (headRollTarget - headRollNow) * Math.min(1, dt * headEase)
+
+    const yaw = headYawNow
+    const pitch = headPitchNow
+    const roll = headRollNow
+    // лёгкий кивок только пока говорит — тоже завязан на случайный дрейф mouthEase,
+    // а не на жёсткий синус, поэтому не выглядит метрономом
+    const nod = props.speaking ? mouthEase * 0.05 : 0
+    // "дыхание" — медленный, едва заметный синус остаётся уместным (это и должно
+    // быть мягко-периодичным, как настоящее дыхание)
     const breath = Math.sin(t * 1.15) * 0.012
 
     const head = vrm.humanoid?.getNormalizedBoneNode('head')

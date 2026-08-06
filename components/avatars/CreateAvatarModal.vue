@@ -41,7 +41,7 @@
             >
               <div class="gallery-thumb">
                 <img v-if="a.preview" :src="a.preview" :alt="a.name" />
-                <VrmAvatar v-else :vrm-url="a.url" :speaking="false" />
+                <VrmAvatar v-else :vrm-url="a.url" :speaking="false" :y-offset="a.yOffset" />
               </div>
               <span class="gallery-name">{{ a.name }}</span>
             </button>
@@ -49,7 +49,7 @@
 
           <!-- Живой 3D-превью выбранного -->
           <div v-if="previewUrl" class="vrm-preview">
-            <VrmAvatar :vrm-url="previewUrl" :speaking="false" />
+            <VrmAvatar :vrm-url="previewUrl" :speaking="false" :y-offset="previewYOffset" />
           </div>
 
           <!-- Свой файл -->
@@ -119,7 +119,7 @@ const selectedVoice = ref(VOICES[0].id)
 // Файлы .vrm лежат в public/avatars/, превью-картинки (опционально) — там же.
 const AVATAR_LIBRARY = [
   { id: 'allo21',   name: 'Алло',            url: '/avatars/allo21.vrm',   preview: '' },
-  { id: 'teacher1', name: 'Преподаватель 1', url: '/avatars/teacher2.vrm', preview: '' },
+  { id: 'teacher1', name: 'Преподаватель 1', url: '/avatars/teacher1.vrm', preview: '' },
   // Добавляй сюда следующих преподавателей:
   // { id: 'teacher2', name: 'Айгерим', url: '/avatars/teacher2.vrm', preview: '/avatars/teacher2.png' },
 ]
@@ -149,6 +149,12 @@ const onVrmPick = (e: Event) => {
 const previewUrl = computed(() =>
   vrmFile.value ? URL.createObjectURL(vrmFile.value) : selectedLibraryUrl.value || ''
 )
+// поправка положения для превью — берём из выбранной библиотечной модели (у своего файла — 0)
+const previewYOffset = computed(() => {
+  if (vrmFile.value) return 0
+  const found = AVATAR_LIBRARY.find(a => a.id === selectedLibraryId.value)
+  return found?.yOffset ?? 0
+})
 
 const canSubmit = computed(() => (!!vrmFile.value || !!selectedLibraryUrl.value) && !!selectedVoice.value)
 
