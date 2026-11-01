@@ -6,7 +6,7 @@ let _api: AxiosInstance | null = null
 let _baseURL: string | null = null
 let _loggingOut = false
 let _refreshing = false
-let _refreshQueue: Array<(token: string) => void> = []
+let _refreshQueue: Array<{ resolve: (token: string) => void; reject: () => void }> = []
 
 export const resetLogoutFlag = () => { _loggingOut = false }
 
@@ -57,10 +57,13 @@ export const useApi = (): AxiosInstance => {
       original._retry = true
 
       if (_refreshing) {
-        return new Promise((resolve) => {
-          _refreshQueue.push((token) => {
-            original.headers.Authorization = `Bearer ${token}`
-            resolve(_api!.request(original))
+        return new Promise((resolve, reject) => {
+          _refreshQueue.push({
+            resolve: (token) => {
+              original.headers.Authorization = `Bearer ${token}`
+              resolve(_api!.request(original))
+            },
+            reject: () => reject(e),
           })
         })
       }
@@ -85,12 +88,13 @@ export const useApi = (): AxiosInstance => {
           auth.setRefreshToken(data.refresh_token)
         } catch {}
 
-        _refreshQueue.forEach(cb => cb(data.access_token))
+        _refreshQueue.forEach(pending => pending.resolve(data.access_token))
         _refreshQueue = []
 
         original.headers.Authorization = `Bearer ${data.access_token}`
         return _api!.request(original)
       } catch {
+        _refreshQueue.forEach(pending => pending.reject())
         _refreshQueue = []
         doLogout()
         return Promise.reject(e)
