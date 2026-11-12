@@ -51,4 +51,4 @@ Use the preview URL printed in the terminal. The backend is still required for A
 
 ## API client regression tests
 
-After installing dependencies, run `npm test`. The tests exercise concurrent requests through the Axios interceptors: successful token refresh, failed refresh, and a repeated 401 after retry. Network calls and the auth store are replaced with test doubles, so no running backend, account or API keys are needed.
+After installing dependencies, run `npm test`. The tests exercise concurrent requests through the Axios interceptors: a successful shared refresh, an expired refresh token, a network failure during refresh, and a repeated 401 after retry. Network calls and the auth store are replaced with test doubles, so no running backend, account or API keys are needed.
